@@ -1,4 +1,4 @@
-package com.jetpacker06.modpackage;
+package com.jetpacker06.customsnifferloot;
 
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.eventbus.api.IEventBus;
@@ -7,16 +7,13 @@ import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-//Mod ID can have ONLY LOWERCASE LETTERS. No numbers, no underscores, no characters, no capitals, no spaces.
-@Mod(ModMainClass.MOD_ID)
-public class ModMainClass {
-    public static final String MOD_ID = "yourmodidhere";
+@Mod(CustomSnifferLoot.MOD_ID)
+public class CustomSnifferLoot {
+    public static final String MOD_ID = "customsnifferloot";
     public static final Logger LOGGER = LogManager.getLogger();
 
-    public ModMainClass() {
+    public CustomSnifferLoot() {
         IEventBus eventBus = FMLJavaModLoadingContext.get().getModEventBus();
-        ModBlocks.register(eventBus);
-        ModItems.register(eventBus);
         FMLJavaModLoadingContext.get().getModEventBus().addListener(this::setup);
         MinecraftForge.EVENT_BUS.register(this);
     }

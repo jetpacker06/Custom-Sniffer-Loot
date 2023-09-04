@@ -1,1 +1,2 @@
-Add new sniffer gifts via configuration.
+## Add new sniffer gifts via configuration.   
+To configure, open config/custom_sniffer_loot.json, then inside the array you can enter any number of strings to represent the items you want the sniffer to drop. Use the format minecraft:stick. You can also disable either of the two default sniffer drop items.

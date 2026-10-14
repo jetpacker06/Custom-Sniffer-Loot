@@ -6,10 +6,14 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mojang.brigadier.StringReader;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import net.minecraft.commands.CommandBuildContext;
+import net.minecraft.commands.arguments.item.ItemArgument;
 import net.minecraft.commands.arguments.item.ItemInput;
-import net.minecraft.commands.arguments.item.ItemParser;
 import net.minecraft.core.HolderLookup;
-import net.minecraft.world.item.ItemStack;
+import net.minecraft.core.component.DataComponentPatch;
+import net.minecraft.core.component.DataComponentType;
+import net.minecraft.world.flag.FeatureFlags;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.level.storage.loot.BuiltInLootTables;
 import net.minecraft.world.level.storage.loot.LootPool;
 import net.minecraft.world.level.storage.loot.LootTable;
@@ -30,6 +34,8 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileWriter;
 import java.util.ArrayList;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Scanner;
 
 @Mod(CustomSnifferLoot.MOD_ID)
@@ -41,13 +47,14 @@ public class CustomSnifferLoot {
 
     private static boolean debugMode;
 
-    private record SnifferLootEntry(ItemStack item, int weight) {}
+    // 1.21.2 FIX: No longer store ItemStacks. Store the raw Item and its component patch!
+    private record SnifferLootEntry(Item item, DataComponentPatch components, int weight) {}
 
     private static final ArrayList<SnifferLootEntry> lootEntries = new ArrayList<>();
 
-    // 1.21 requires IEventBus and ModContainer passed into the constructor
     public CustomSnifferLoot(IEventBus modEventBus, ModContainer modContainer) {
         NeoForge.EVENT_BUS.register(this);
+        generateDefaultConfig();
     }
 
     private static void debugPrint(Object message) {
@@ -56,17 +63,15 @@ public class CustomSnifferLoot {
         }
     }
 
-    private static void loadConfig(HolderLookup.Provider lookupProvider) {
-        lootEntries.clear(); // Always clear to support /reload
+    private static void generateDefaultConfig() {
         try {
-            File configFile = new File(FMLPaths.GAMEDIR.get() + "/config/" + FILENAME);
+            File configFile = new File(FMLPaths.CONFIGDIR.get().toFile(), FILENAME);
             if (!configFile.exists()) {
                 configFile.createNewFile();
                 try (FileWriter writer = new FileWriter(configFile)) {
-                    // Default config template for 1.20.5+ Component syntax
                     writer.write("""
                     {
-                      "debugMode": false,
+                      "debugMode": true,
                       "snifferItems": [
                         {
                           "_comment": "Note: removing these entries will remove them from the pool. Alternatively, set weight to 0",
@@ -78,20 +83,28 @@ public class CustomSnifferLoot {
                           "weight": 1
                         },
                         {
-                          "_comment": "Component example 1. Bracket syntax.",
-                          "item": "minecraft:diamond_sword[minecraft:enchantments={levels:{\\"minecraft:sharpness\\":5}}]",
-                          "weight": 0
-                        },
-                        {
-                          "_comment": "Component example 2. Setting block entity data on a beehive.",
-                          "item": "minecraft:beehive[minecraft:block_entity_data={id:\\"minecraft:beehive\\",Bees:[{entity_data:{id:\\"minecraft:bee\\"},ticks_in_hive:600}]}]",
+                          "_comment": "Component example 1",
+                          "item": "minecraft:diamond_sword[minecraft:enchantments={\\"minecraft:sharpness\\":5}]",
                           "weight": 0
                         }
                       ]
                     }
                     """);
                 }
-                LOGGER.info("Created " + FILENAME);
+                LOGGER.info("Created default config file: " + FILENAME);
+            }
+        } catch (Exception e) {
+            LOGGER.error("Error generating CustomSnifferLoot default configuration", e);
+        }
+    }
+
+    private static void loadConfig(HolderLookup.Provider lookupProvider) {
+        lootEntries.clear();
+        try {
+            File configFile = new File(FMLPaths.CONFIGDIR.get().toFile(), FILENAME);
+
+            if (!configFile.exists()) {
+                generateDefaultConfig();
             }
 
             String rawText = readFile(configFile);
@@ -104,9 +117,6 @@ public class CustomSnifferLoot {
                 debugMode = map.getAsJsonPrimitive("debugMode").getAsBoolean();
             }
 
-            debugPrint("Current sniffer config:");
-            debugPrint(new GsonBuilder().setPrettyPrinting().create().toJson(map));
-
             if (map.has("snifferItems")) {
                 for (JsonElement element : map.getAsJsonArray("snifferItems")) {
                     JsonObject obj = element.getAsJsonObject();
@@ -115,13 +125,9 @@ public class CustomSnifferLoot {
                     String entryString = obj.get("item").getAsString();
                     int weight = obj.get("weight").getAsInt();
 
-                    try {
-                        ItemStack stack = parseItemStack(entryString, lookupProvider);
-                        if (!stack.isEmpty()) {
-                            lootEntries.add(new SnifferLootEntry(stack, weight));
-                        }
-                    } catch (Exception e) {
-                        debugPrint("Failed to parse item entry: " + entryString);
+                    SnifferLootEntry entry = parseItem(entryString, weight, lookupProvider);
+                    if (entry != null) {
+                        lootEntries.add(entry);
                     }
                 }
             }
@@ -131,17 +137,20 @@ public class CustomSnifferLoot {
         }
     }
 
-    private static ItemStack parseItemStack(String entry, HolderLookup.Provider lookupProvider) {
+    // Parses string but DOES NOT create an ItemStack, avoiding the "Components not bound yet" NPE
+    private static SnifferLootEntry parseItem(String entry, int weight, HolderLookup.Provider lookupProvider) {
         try {
-            // Uses 1.21's instantiated item parser that supports components ([enchantments={...}]) natively
-            ItemParser parser = new ItemParser(lookupProvider);
-            ItemParser.ItemResult result = parser.parse(new StringReader(entry.trim()));
+            CommandBuildContext ctx = CommandBuildContext.simple(lookupProvider, FeatureFlags.DEFAULT_FLAGS);
+            ItemInput input = ItemArgument.item(ctx).parse(new StringReader(entry.trim()));
 
-            ItemInput input = new ItemInput(result.item(), result.components());
-            return input.createItemStack(1, false);
+            // Just grab the raw item and its parsed components
+            return new SnifferLootEntry(input.item().value(), input.components(), weight);
         } catch (CommandSyntaxException e) {
-            debugPrint("Invalid item entry or components for \"" + entry + "\": " + e.getMessage());
-            return ItemStack.EMPTY;
+            debugPrint("Syntax error in item entry \"" + entry + "\": " + e.getMessage());
+            return null;
+        } catch (Exception e) {
+            LOGGER.error("CRITICAL error parsing item entry: " + entry, e);
+            return null;
         }
     }
 
@@ -155,20 +164,18 @@ public class CustomSnifferLoot {
         }
     }
 
-    // Helper to safely apply components without generic wildcard compile errors
+    // Helper method to safely apply wildcards to SetComponentsFunction
     @SuppressWarnings("unchecked")
-    private static <T> void applyComponent(LootItem.Builder<?> builder, net.minecraft.core.component.TypedDataComponent<T> component) {
-        builder.apply(SetComponentsFunction.setComponent(component.type(), component.value()));
+    private static <T> void applyComponentUnsafe(LootItem.Builder<?> builder, DataComponentType<?> type, Object value) {
+        builder.apply(SetComponentsFunction.setComponent((DataComponentType<T>) type, (T) value));
     }
 
     @SubscribeEvent
     public void registerLootTable(LootTableLoadEvent event) {
-        // BuiltInLootTables are ResourceKeys in 1.21, calling .location() gets the string ResourceLocation
-        if (!event.getName().equals(BuiltInLootTables.SNIFFER_DIGGING.location())) {
+        if (!event.getName().equals(BuiltInLootTables.SNIFFER_DIGGING.identifier())) {
             return;
         }
 
-        // 1.21 NeoForge's LootTableLoadEvent supplies the registry lookup directly
         loadConfig(event.getRegistries());
 
         debugPrint("Sniffer loot table loading with " + lootEntries.size() + " items");
@@ -178,12 +185,16 @@ public class CustomSnifferLoot {
         for (SnifferLootEntry entry : lootEntries) {
             if (entry.weight <= 0) continue;
 
-            var entryBuilder = LootItem.lootTableItem(entry.item.getItem());
+            // Start building the item pool entry from the raw Item
+            var entryBuilder = LootItem.lootTableItem(entry.item);
 
-            // 1.21: Iterate through every configured component and apply it to the loot entry
-            if (!entry.item.getComponents().isEmpty()) {
-                for (net.minecraft.core.component.TypedDataComponent<?> component : entry.item.getComponents()) {
-                    applyComponent(entryBuilder, component);
+            // Directly inject the stored parsed components into the loot table builder!
+            if (entry.components != null && !entry.components.isEmpty()) {
+                for (Map.Entry<DataComponentType<?>, Optional<?>> mapEntry : entry.components.entrySet()) {
+                    // Only apply components that were actually parsed and added (present)
+                    if (mapEntry.getValue().isPresent()) {
+                        applyComponentUnsafe(entryBuilder, mapEntry.getKey(), mapEntry.getValue().get());
+                    }
                 }
             }
 
@@ -197,7 +208,6 @@ public class CustomSnifferLoot {
                     .setParamSet(event.getTable().getParamSet())
                     .setRandomSequence(event.getName())
                     .withPool(pool);
-
             event.setTable(newTableBuilder.build());
         }
     }

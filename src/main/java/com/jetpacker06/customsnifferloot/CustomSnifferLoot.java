@@ -39,6 +39,7 @@ public class CustomSnifferLoot {
     private static boolean debugMode;
     private static boolean disablePitcherPod;
     private static boolean disableTorchflower;
+
     private static final ArrayList<Item> items = new ArrayList<>();
 
     public CustomSnifferLoot() {
@@ -48,7 +49,6 @@ public class CustomSnifferLoot {
 
     private static void debugPrint(Object message) {
         if (debugMode) {
-            LOGGER.info("CSL: ");
             LOGGER.info(message);
         }
     }
@@ -117,17 +117,17 @@ public class CustomSnifferLoot {
         if (!event.getTable().getLootTableId().equals(BuiltInLootTables.SNIFFER_DIGGING)) {
             return;
         }
-        System.out.println("Sniffer loot table loading");
-        LootTable.Builder table = LootTable.lootTable();
+        debugPrint("Sniffer loot table loading");
+        LootPool.Builder pool = LootPool.lootPool().setRolls(ConstantValue.exactly(1f));
         if (!disablePitcherPod) {
-            table.withPool(LootPool.lootPool().setRolls(ConstantValue.exactly(1.0f)).add(LootItem.lootTableItem(Items.PITCHER_POD)));
+            pool.add(LootItem.lootTableItem(Items.PITCHER_POD));
         }
         if (!disableTorchflower) {
-            table.withPool(LootPool.lootPool().setRolls(ConstantValue.exactly(1.0f)).add(LootItem.lootTableItem(Items.TORCHFLOWER_SEEDS)));
+            pool.add(LootItem.lootTableItem(Items.TORCHFLOWER_SEEDS));
         }
         for (Item item : items) {
-            table.withPool(LootPool.lootPool().setRolls(ConstantValue.exactly(1.0f)).add(LootItem.lootTableItem(item)));
+            pool.add(LootItem.lootTableItem(item));
         }
-        event.setTable(table.build());
+        event.setTable(LootTable.lootTable().withPool(pool).build());
     }
 }
